@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en" ng-app>
+  <head>
+    <title>JoshOS Command & Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="/js/jquery.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <link href="//maxcdn.bootstrapcdn.com/bootstrap/3.3.2/css/bootstrap.min.css" rel="stylesheet">
+    <script src="//maxcdn.bootstrapcdn.com/bootstrap/3.3.2/js/bootstrap.min.js"></script>
+    <script src="https://cdn.rawgit.com/dmauro/Keypress/development/keypress.js"></script>
+    <link href='https://fonts.googleapis.com/css?family=Open+Sans' rel='stylesheet' type='text/css'>
+    <script>
+      var socket = io.connect(); 
+
+      var keys = {}
+      
+      var CNC = {
+        webConnected: false,
+        Robot: {
+          Armed: false,
+          Connected: false,
+          MainBattery: 0,
+          BackupBattery: 0,
+          SecondsSinceStart: 0,
+          WifiStrength: "0.00",
+        },
+        updateGUI: function() {
+          $("#mainBatteryVoltage").text(CNC.Robot.MainBattery + " (mV)");
+          $("#backupBatteryVoltage").text((CNC.Robot.BackupBattery == 0 ? "N/A" : CNC.Robot.BackupBattery + " (mV)"));
+          $("#secondsSinceStart").text(CNC.Robot.SecondsSinceStart);
+          $("#wifiStrength").text(CNC.Robot.WifiStrength + "%");
+        }
+      }
+      
+      //The check functions will return true if an alarm condition has been met.
+      var alarms = {
+        "No Circuit": {
+          description: "A circuit could not be made to connect with the robot. Please ensure that the robot is turned on, is connected and that the web interface is also connected.",
+          checkFunction: function() {
+            return (!CNC.Robot.Connected && !CNC.webConnected);
+          },
+          critical: true,
+        },
+        "Low Voltage": {
+          description: "The robot is running low on battery. Please recharge the battery.",
+          checkFunction: function() {
+            if (parseInt(CNC.Robot.MainBattery) == 0) {
+              $("#mainBatteryVoltage").parent().find('.footer').removeClass('nominal').removeClass('warning').addClass('critical');
+              alarms['Low Voltage'].critical = true;
+            } else if (parseInt(CNC.Robot.MainBattery) < 6000) {
+              $("#mainBatteryVoltage").parent().find('.footer').removeClass('nominal').removeClass('critical').addClass('warning');
+              alarms['Low Voltage'].critical = false;
+            } else {
+              $("#mainBatteryVoltage").parent().find('.footer').removeClass('critical').removeClass('warning').addClass('nominal');
+              alarms['Low Voltage'].critical = false;
+            }
+            if (parseInt(CNC.Robot.BackupBattery) == 0) {
+              $("#backupBatteryVoltage").parent().find('.footer').removeClass('critical').addClass('nominal');
+            } else if (parseInt(CNC.Robot.BackupBattery) < 6000) {
+              $("#backupBatteryVoltage").parent().find('.footer').removeClass('nominal').addClass('critical');
+            } else {
+              $("#backupBatteryVoltage").parent().find('.footer').removeClass('critical').addClass('nominal');
+            }
+            return (parseInt(CNC.Robot.MainBattery) < 6000)
+          },
+          critical: false,
+        },
+        "Bad Connection": {
+          description: "The robot is losing WiFi connection. Control and telemetry may be limited.",
+          checkFunction: function() {
+            if (parseInt(CNC.Robot.WifiStrength) < 70) {
+              $("#wifiStrength").parent().find('.footer').removeClass('nominal').removeClass('critical').addClass('warning');
+            } else {
+              $("#wifiStrength").parent().find('.footer').removeClass('warning').removeClass('critical').addClass('nominal');
+            }
+            return (parseInt(CNC.Robot.WifiStrength) < 70);
+          },
+          critical: false,
+        },
+        "Disarmed": {
+          description: "The robot is disarmed and will not accept controls from the web interface.",
+          checkFunction: function() {
+            return false;
+          },
+          critical: false,
+        },
+        "Network Lag": {
+          description: "The CnC server has not received telemetry from the robot for more than 10 seconds.",
+          checkFunction: function() {
+            return false;
+          },
+          critical: false,
+        }
+      }
+      
+      function checkAlarms() {
+        var alarmCount = 0;
+        var criticalCount = 0;
+        Object.keys(alarms).forEach(function(key) {
+          var alarmRes = alarms[key].checkFunction();
+          if (alarmRes) {
+            alarmCount++;
+            if (alarms[key].critical) {
+              criticalCount++;
+            }
+          }
+        });
+        if (alarmCount == 0) {
+          $("#alarmDisplay").html("0 Alarms - All Systems Nominal <span class=\"glyphicon glyphicon-ok\" aria-hidden=\"true\"></span>");
+          $(".alarmsCount").removeClass("warningGradient").removeClass('criticalGradient');
+        } else { 
+          $("#alarmDisplay").html(alarmCount + " Alarm(s) (" + criticalCount + " Critical) <span class=\"glyphPush glyphicon glyphicon-remove-circle\" aria-hidden=\"true\"></span>");
+          if (criticalCount == 0) {
+            $(".alarmsCount").addClass("warningGradient");
+          } else {
+            $(".alarmsCount").addClass("criticalGradient");
+          }
+        }
+        setTimeout(checkAlarms, 750);
+      }
+      checkAlarms();
+
+      function pushCommands() {
+        var toPush = {
+          '3': 0,
+          '4': 0,
+          '1': 0
+        }
+        
+        var netY = 0;
+        var netX = 0;
+        var strafe = 0;
+        if (keys.W && keys.W == true) {
+          netY += 127;
+        }
+        if (keys.S && keys.S == true) {
+          netY -= 127;
+        }
+        if (keys.D && keys.D == true) {
+          netX += 127;
+        }
+        if (keys.A && keys.A == true) {
+          netX -= 127;
+        }
+        if (keys.Q && keys.Q == true) {
+          strafe += 127;
+        }
+        if (keys.E && keys.E == true) {
+          strafe -= 127;
+        }
+        toPush['3'] = netY;
+        toPush['4'] = netX;
+        toPush['1'] = strafe;
+        console.log(toPush);
+        socket.emit('controlData', toPush);
+      }
+      
+      function translate(code) {
+          var keys = {
+              87: "W",
+              65: "A",
+              83: "S",
+              68: "D",
+              81: "Q",
+              69: "E",
+          }
+          return keys[code];
+      }
+      window.addEventListener('keydown', function(e){
+      	keys[translate(e.which)] = true;
+      	pushCommands();
+      });
+      window.addEventListener('keyup', function(e){
+      	keys[translate(e.which)] = false;
+      	pushCommands();
+      });
+  
+      socket.on('connect', function () {
+        $('#webStatus').attr('class', 'value pending');
+        
+        var pass = prompt('Please enter the CnC password:');
+        socket.emit('identify', 0, pass);
+      });
+      
+      socket.on('authSuccess', function() {
+        $('#webStatus').attr('class', 'value connected');
+        $("#webStatus").parent().find('.footer').removeClass('critical').addClass('nominal');
+      });
+      
+      socket.on('authError', function() {
+        alert('Error authenticating with CnC server!');
+      });
+
+      socket.on('robotConnected', function (connected) {
+        CNC.Robot.Connected = connected;
+        if (connected) {
+          $('#robotStatus').attr('class', 'value connected');
+          $("#robotStatus").parent().find('.footer').removeClass('critical').addClass('nominal');
+        } else {
+          $('#robotStatus').attr('class', 'value disconnected');
+          $("#robotStatus").parent().find('.footer').removeClass('nominal').addClass('critical');
+        }
+      });
+      
+      socket.on('robotTelemetry', function(robot) {
+        CNC.Robot.MainBattery = robot.MainBattery;
+        CNC.Robot.BackupBattery = robot.BackupBattery;
+        CNC.Robot.Connected = true;
+        CNC.Robot.SecondsSinceStart = robot.SecondsSinceStart;
+        
+        CNC.updateGUI();
+      });
+      
+      socket.on('robotArmed', function(armed) {
+        CNC.Robot.Armed = armed;
+        $('#robotControlStatus').text((armed == true ? 'ARMED' : 'DISARMED'));
+      });
+      
+      socket.on('wifiStatus', function(strength) {
+        CNC.Robot.WifiStrength = strength;
+        $("#wifiStrength").text(strength + "%");
+      });
+      
+      socket.on('robotIps', function(ips) {
+        console.log(ips);
+      });
+    </script>
+    <style>
+      @-webkit-keyframes flash {  
+        from { opacity: 1.0; }
+        to { opacity: 0.0; }
+      }
+      body {
+        background: #3e5471 url('./img/bg.jpg');
+        color: #C8EEF1 !important;
+        font-family: 'Open Sans', sans-serif;
+        z-index: inherit;
+      }
+      .glyphPush {
+        top: 4px !important;
+      }
+      .critical:before {
+        content: "Critical";
+      }
+      .critical {
+        background: #ff3232 !important; /* Old browsers */
+        background: -moz-linear-gradient(top,  #ff3232 0%, #a55959 100%) !important; /* FF3.6+ */
+        background: -webkit-gradient(linear, left top, left bottom, color-stop(0%,#ff3232), color-stop(100%,#a55959)) !important; /* Chrome,Safari4+ */
+        background: -webkit-linear-gradient(top,  #ff3232 0%,#a55959 100%) !important; /* Chrome10+,Safari5.1+ */
+        background: -o-linear-gradient(top,  #ff3232 0%,#a55959 100%) !important; /* Opera 11.10+ */
+        background: -ms-linear-gradient(top,  #ff3232 0%,#a55959 100%) !important; /* IE10+ */
+        background: linear-gradient(to bottom,  #ff3232 0%,#a55959 100%) !important; /* W3C */
+        filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#ff3232', endColorstr='#a55959',GradientType=0 ) !important; /* IE6-9 */
+      }
+      .nominal:before {
+        content: "Nominal";
+      }
+      .warning:before {
+        content: "Warning";
+      }
+      .warning {
+        background: #e2e23b !important; /* Old browsers */
+        background: -moz-linear-gradient(top,  #e2e23b 1%, #d1c06a 100%) !important; /* FF3.6+ */
+        background: -webkit-gradient(linear, left top, left bottom, color-stop(1%,#e2e23b), color-stop(100%,#d1c06a)) !important; /* Chrome,Safari4+ */
+        background: -webkit-linear-gradient(top,  #e2e23b 1%,#d1c06a 100%) !important; /* Chrome10+,Safari5.1+ */
+        background: -o-linear-gradient(top,  #e2e23b 1%,#d1c06a 100%) !important; /* Opera 11.10+ */
+        background: -ms-linear-gradient(top,  #e2e23b 1%,#d1c06a 100%) !important; /* IE10+ */
+        background: linear-gradient(to bottom,  #e2e23b 1%,#d1c06a 100%) !important; /* W3C */
+        filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#e2e23b', endColorstr='#d1c06a',GradientType=0 ) !important; /* IE6-9 */
+      }
+      .disconnected:before {
+        content: "Disconnected";
+      }
+      .disconnected {
+        color: red;
+        -webkit-animation-name: flash;  
+        -webkit-animation-iteration-count: infinite;  
+        -webkit-animation-timing-function: cubic-bezier(.5, 0, 1, 1);
+        -webkit-animation-duration: .8s; 
+      }
+      .connected:before {
+        content: "Connected";
+      }
+      .pending:before {
+        content: "Pending";
+      }
+      .pending {
+        color: yellow;
+        -webkit-animation-name: flash;  
+        -webkit-animation-iteration-count: infinite;  
+        -webkit-animation-timing-function: cubic-bezier(.5, 0, 1, 1);
+        -webkit-animation-duration: 1.3s; 
+      }
+      .warningGradient {
+        background: #e2e23b !important; /* Old browsers */
+        background: -moz-linear-gradient(top,  #e2e23b 1%, #d1c06a 100%) !important; /* FF3.6+ */
+        background: -webkit-gradient(linear, left top, left bottom, color-stop(1%,#e2e23b), color-stop(100%,#d1c06a)) !important; /* Chrome,Safari4+ */
+        background: -webkit-linear-gradient(top,  #e2e23b 1%,#d1c06a 100%) !important; /* Chrome10+,Safari5.1+ */
+        background: -o-linear-gradient(top,  #e2e23b 1%,#d1c06a 100%) !important; /* Opera 11.10+ */
+        background: -ms-linear-gradient(top,  #e2e23b 1%,#d1c06a 100%) !important; /* IE10+ */
+        background: linear-gradient(to bottom,  #e2e23b 1%,#d1c06a 100%) !important; /* W3C */
+        filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#e2e23b', endColorstr='#d1c06a',GradientType=0 ) !important; /* IE6-9 */
+      }
+      .criticalGradient {
+        background: #ff3232 !important; /* Old browsers */
+        background: -moz-linear-gradient(top,  #ff3232 0%, #a55959 100%) !important; /* FF3.6+ */
+        background: -webkit-gradient(linear, left top, left bottom, color-stop(0%,#ff3232), color-stop(100%,#a55959)) !important; /* Chrome,Safari4+ */
+        background: -webkit-linear-gradient(top,  #ff3232 0%,#a55959 100%) !important; /* Chrome10+,Safari5.1+ */
+        background: -o-linear-gradient(top,  #ff3232 0%,#a55959 100%) !important; /* Opera 11.10+ */
+        background: -ms-linear-gradient(top,  #ff3232 0%,#a55959 100%) !important; /* IE10+ */
+        background: linear-gradient(to bottom,  #ff3232 0%,#a55959 100%) !important; /* W3C */
+        filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#ff3232', endColorstr='#a55959',GradientType=0 ) !important; /* IE6-9 */
+      }
+      .robotNumericalData {
+        padding: 0px !important;
+        background: #8298bf; /* Old browsers */
+        background: -moz-linear-gradient(top,  #8298bf 0%, #526d88 100%); /* FF3.6+ */
+        background: -webkit-gradient(linear, left top, left bottom, color-stop(0%,#8298bf), color-stop(100%,#526d88)); /* Chrome,Safari4+ */
+        background: -webkit-linear-gradient(top,  #8298bf 0%,#526d88 100%); /* Chrome10+,Safari5.1+ */
+        background: -o-linear-gradient(top,  #8298bf 0%,#526d88 100%); /* Opera 11.10+ */
+        background: -ms-linear-gradient(top,  #8298bf 0%,#526d88 100%); /* IE10+ */
+        background: linear-gradient(to bottom,  #8298bf 0%,#526d88 100%); /* W3C */
+        filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#8298bf', endColorstr='#526d88',GradientType=0 ); /* IE6-9 */
+        border-right: 2px solid #5D7594;
+      }
+      .robotNumericalData:last-child {
+        border-right: none !important;
+      }
+      .robotNumericalData > .dataHolder > .header {
+        border-bottom: 1px solid white;
+        font-size: 20px;
+        padding-left: 5px;
+      }
+      .robotNumericalData > .dataHolder > .value {
+        font-size: 40px;
+        text-align: center;
+        color: #C8EEF1;
+      }
+      .robotNumericalData > .dataHolder > .footer {
+        /*border-top: 1px solid white;*/
+        font-size: 16px;
+        padding-left: 5px;
+        text-align: center;
+      }
+      .row {
+        /*border: 2px solid #718EB0;*/
+      }
+      #bgStream {
+          position: absolute;
+          top: 0;
+          bottom: 0;
+          left: 0;
+          right: 0;
+          padding: 0;
+          margin: 0;
+          border: 0;
+          width: 100%; height: 100%;
+          z-index: -1;
+      }
+    </style>
+  </head>
+  <body>
+    <iframe id="bgStream" src="http://www.ustream.tv/embed/17074538?v=3&wmode=transparent&autoplay=true&controls=false&volume=0&quality=hd" scrolling="no" frameborder="0" style="border: 0px none transparent;"></iframe>
+    <div class="container" ng-controller="ChatController">
+      <div class="row">
+        <div class="col-xs-12 robotNumericalData">
+          <div class="dataHolder">
+            <div class="footer">
+              <i>JoshOS v1.0 Command & Control</i>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="row">
+        <div class="col-xs-6 robotNumericalData">
+          <div class="dataHolder">
+            <div class="header">
+              Robot Status
+            </div>
+            <div id="robotStatus" class="value disconnected">
+            </div>
+            <div class="footer critical">
+            </div>
+          </div>
+        </div>
+        <div class="col-xs-6 robotNumericalData">
+          <div class="dataHolder">
+            <div class="header">
+              Web Status
+            </div>
+            <div id="webStatus" class="value disconnected">
+            </div>
+            <div class="footer critical">
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="row">
+        <div class="col-xs-12 alarmsCount robotNumericalData">
+          <div class="dataHolder">
+            <div id="alarmDisplay" class="value">
+              0 Alarms - All Systems Nominal <span class="glyphicon glyphicon-ok" aria-hidden="true"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="row">
+        <div class="col-xs-4 robotNumericalData">
+          <div class="dataHolder">
+            <div class="header">
+              Main Battery Voltage (mV)
+            </div>
+            <div id="mainBatteryVoltage" class="value">
+              0.0 mV
+            </div>
+            <div class="footer nominal">
+            </div>
+          </div>
+        </div>
+        <div class="col-xs-4 robotNumericalData">
+          <div class="dataHolder">
+            <div class="header">
+              B-Battery Voltage (mV)
+            </div>
+            <div id="backupBatteryVoltage" class="value">
+              0.0 mV
+            </div>
+            <div class="footer nominal">
+            </div>
+          </div>
+        </div>
+        <div class="col-xs-4 robotNumericalData">
+          <div class="dataHolder">
+            <div class="header">
+              Seconds Since Startup
+            </div>
+            <div id="secondsSinceStart" class="value">
+              N/A seconds
+            </div>
+            <div class="footer">
+              
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-xs-4 robotNumericalData">
+          <div class="dataHolder">
+            <div class="header">
+              WiFi Status
+            </div>
+            <div id="wifiStrength" class="value">
+              0.00%
+            </div>
+            <div class="footer critical">
+            </div>
+          </div>
+        </div>
+        <div class="col-xs-4 robotNumericalData">
+          <div class="dataHolder">
+            <div class="header">
+              Robot Control Status
+            </div>
+            <div id="robotControlStatus" class="value">
+              DISARMED
+            </div>
+            <div class="footer nominal">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
