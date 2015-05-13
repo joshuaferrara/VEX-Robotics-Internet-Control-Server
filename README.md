@@ -21,7 +21,7 @@ VEX Cortex `<- Serial Connection ->` Raspberry PI `<- Internet ->` Web Server `<
 To install the webserver, simply clone this repo to your computer: `git clone https://github.com/joshuaferrara/VEX-Internet-Control-Server.git`.
 
 # Usage
-Once installation is complete, `cd` into the new directory and execute this command `node index.js`. At this point, the web server will be up and running on port 3000. When you visit the site, a box will popup asking for a password. By pressing cancel, you will be in read-only mode and can not control the robot. If you enter the default password `oats`, you'll be able to control the robot with the `WASD` keys on your keyboard once the robot is connection. Make sure to forward port 3000 on your router to allow for outside access. If you want to keep the webserver running forever, look into using the NodeJS module `forever` or `pm2`.
+Once installation is complete, `cd` into the new directory and execute this command `node index.js`. At this point, the web server will be up and running on port 3000. When you visit the site, a box will popup asking for a password. By pressing cancel, you will be in read-only mode and can not control the robot. If you enter the default password `oats`, you'll be able to control the robot with the `WASD` keys on your keyboard once the robot is connected and armed. Make sure to forward port 3000 on your router to allow for outside access. If you want to keep the webserver running forever, look into using the NodeJS module `forever` or `pm2`.
 
 # Acknowledgements
 [Santa Margarita Catholic High School](http://smhs.org/) - for providing us with a top-notch robotics class and teacher, Mr. Jason Lawrence.
